@@ -21,6 +21,7 @@ FONT_COLOR = (119, 110, 101)
 FONT = pygame.font.SysFont("comicsans", 60, bold=True)
 MOVE_VEL = 100
 ANIM_FRAMES = 10
+ANIMATING = False
 
 WINDOW = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("2048")
@@ -118,6 +119,7 @@ def get_random_pos(tiles):
     return row,col
 
 def move_tiles(window, tiles, clock, direction):
+    global ANIMATING
     # Compute new grid positions and animations, then animate with easing.
     # Build a 2D grid of tiles (references) for easier processing.
     grid = [[None for _ in range(COLS)] for _ in range(ROWS)]
@@ -197,6 +199,9 @@ def move_tiles(window, tiles, clock, direction):
     if not animations:
         return None
 
+    # mark as animating so main loop can ignore input
+    ANIMATING = True
+
     # Run animation frames
     frames = ANIM_FRAMES
     for f in range(frames):
@@ -253,6 +258,9 @@ def move_tiles(window, tiles, clock, direction):
     for k, t in result_tiles.items():
         tiles[k] = t
 
+    # animation finished — allow input again
+    ANIMATING = False
+
     return end_move(tiles)
 
 
@@ -297,14 +305,16 @@ def main(window):
                 break
 
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_LEFT:
-                    move_tiles(window, tiles, clock, "left")
-                if event.key == pygame.K_RIGHT:
-                    move_tiles(window, tiles, clock, "right")
-                if event.key == pygame.K_UP:
-                    move_tiles(window, tiles, clock, "up")
-                if event.key == pygame.K_DOWN:
-                    move_tiles(window, tiles, clock, "down")
+                # ignore input while animations are running
+                if not ANIMATING:
+                    if event.key == pygame.K_LEFT:
+                        move_tiles(window, tiles, clock, "left")
+                    elif event.key == pygame.K_RIGHT:
+                        move_tiles(window, tiles, clock, "right")
+                    elif event.key == pygame.K_UP:
+                        move_tiles(window, tiles, clock, "up")
+                    elif event.key == pygame.K_DOWN:
+                        move_tiles(window, tiles, clock, "down")
 
         draw(window, tiles)
 
