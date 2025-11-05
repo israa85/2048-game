@@ -19,7 +19,8 @@ BACKGROUND_COLOUR = (205, 192, 180)
 FONT_COLOR = (119, 110, 101)
 
 FONT = pygame.font.SysFont("comicsans", 60, bold=True)
-MOVE_VEL = 20
+MOVE_VEL = 100
+ANIM_FRAMES = 10
 
 WINDOW = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("2048")
@@ -75,6 +76,11 @@ class Tile:
         self.x += delta[0]
         self.y += delta[1]
 
+    def set_xy_from_grid(self): # the tiles like to stray a bit during animation
+        """Helper to snap x,y to current row/col positions."""
+        self.x = self.col * RECT_WIDTH
+        self.y = self.row * RECT_HEIGHT     
+
 def draw_grid(window):
     for row in range(1, ROWS):
         y = row * RECT_HEIGHT
@@ -112,87 +118,140 @@ def get_random_pos(tiles):
     return row,col
 
 def move_tiles(window, tiles, clock, direction):
-    updated = True
-    blocks = set()
+    # Compute new grid positions and animations, then animate with easing.
+    # Build a 2D grid of tiles (references) for easier processing.
+    grid = [[None for _ in range(COLS)] for _ in range(ROWS)]
+    for t in tiles.values():
+        grid[t.row][t.col] = t
 
+    animations = []  # list of dicts: {tile, start, end, is_merge_source, merge_target_key}
+    new_tiles = {}
 
-    if direction == "left":
-        sort_func = lambda x: x.col
-        reverse = False
-        delta = (-MOVE_VEL, 0)
-        boundary_check = lambda tile: tile.col == 0
-        get_next_tile = lambda tile: tiles.get(f"{tile.row}{tile.col - 1}")
-        merge_check = lambda tile, next_tile: tile.x > next_tile.x + MOVE_VEL
-        move_check = (
-            lambda tile, next_tile: tile.x > next_tile.x + RECT_WIDTH + MOVE_VEL
-        )
-        ceil = True
-    elif direction == "right":
-        sort_func = lambda x: x.col
-        reverse = True
-        delta = (MOVE_VEL, 0)
-        boundary_check = lambda tile: tile.col == COLS -1
-        get_next_tile = lambda tile: tiles.get(f"{tile.row}{tile.col + 1}")
-        merge_check = lambda tile, next_tile: tile.x < next_tile.x - MOVE_VEL
-        move_check = (
-            lambda tile, next_tile: tile.x + RECT_WIDTH + MOVE_VEL < next_tile.x
-        )
-        ceil = False
-    elif direction == "up":
-        sort_func = lambda x: x.row
-        reverse = False
-        delta = (0, -MOVE_VEL)
-        boundary_check = lambda tile: tile.row == 0
-        get_next_tile = lambda tile: tiles.get(f"{tile.row - 1}{tile.col}")
-        merge_check = lambda tile, next_tile: tile. y> next_tile.y + MOVE_VEL
-        move_check = (
-            lambda tile, next_tile: tile.y > next_tile.y + RECT_HEIGHT + MOVE_VEL
-        )
-        ceil = True
-    elif direction == "down":
-        sort_func = lambda x: x.row
-        reverse = True
-        delta = (0, MOVE_VEL)
-        boundary_check = lambda tile: tile.row == ROWS - 1
-        get_next_tile = lambda tile: tiles.get(f"{tile.row + 1}{tile.col}")
-        merge_check = lambda tile, next_tile: tile.y < next_tile.y - MOVE_VEL
-        move_check = (
-            lambda tile, next_tile: tile.y + RECT_HEIGHT + MOVE_VEL < next_tile.y
-        )
-        ceil = False
+    def handle_line(get_tile_in_line, set_new_pos):
+        # get_tile_in_line(i) -> Tile or None, set_new_pos(tile, dest_index, is_merged=False, merged_with=None)
+        line = []
+        for i in range(4):
+            tile = get_tile_in_line(i)
+            if tile:
+                line.append(tile)
 
-    while updated:
-        clock.tick(FPS)
-        updated = False
-        sorted_tiles = sorted(tiles.values(), key=sort_func, reverse=reverse)
-
-        for i, tile in enumerate(sorted_tiles):
-            if boundary_check(tile):
-                continue
-
-            next_tile = get_next_tile(tile)
-            if not next_tile:
-                tile.move(delta)
-            elif (
-                    tile.value == next_tile.value
-                    and tile not in blocks
-                    and next_tile not in blocks
-            ):
-                if merge_check(tile, next_tile):
-                    tile.move(delta)
-                else:
-                    next_tile.value *= 2
-                    sorted_tiles.pop(i)
-                    blocks.add(next_tile)
-            elif move_check(tile, next_tile):
-                tile.move(delta)
+        target_idx = 0
+        i = 0
+        while i < len(line):
+            tile = line[i]
+            if i + 1 < len(line) and line[i + 1].value == tile.value:
+                # merge tile and next
+                other = line[i + 1]
+                # both tiles animate to same target cell
+                set_new_pos(tile, target_idx, is_merged=True, merged_with=other)
+                set_new_pos(other, target_idx, is_merged=True, merged_with=tile)
+                target_idx += 1
+                i += 2
             else:
-                continue
+                set_new_pos(tile, target_idx, is_merged=False, merged_with=None)
+                target_idx += 1
+                i += 1
 
-            tile.set_pos(ceil)
-            updated = True
+    # Helpers for each direction
+    if direction == "left":
+        def get_tile(r, c): return grid[r][c]
+        for r in range(ROWS):
+            def getter(i, row=r): return get_tile(row, i)
+            def setter(tile, dest_c, is_merged, merged_with, row=r):
+                start = (tile.x, tile.y)
+                end = (dest_c * RECT_WIDTH, row * RECT_HEIGHT)
+                animations.append({"tile": tile, "start": start, "end": end, "is_merged": is_merged, "merged_with": merged_with, "dest_key": f"{row}{dest_c}"})
+                # record placeholder in new_tiles; finalization after animation
+            handle_line(getter, setter)
+    elif direction == "right":
+        def get_tile(r, c): return grid[r][c]
+        for r in range(ROWS):
+            def getter(i, row=r): return get_tile(row, COLS - 1 - i)
+            def setter(tile, dest_i, is_merged, merged_with, row=r):
+                dest_c = COLS - 1 - dest_i
+                start = (tile.x, tile.y)
+                end = (dest_c * RECT_WIDTH, row * RECT_HEIGHT)
+                animations.append({"tile": tile, "start": start, "end": end, "is_merged": is_merged, "merged_with": merged_with, "dest_key": f"{row}{dest_c}"})
+            handle_line(getter, setter)
+    elif direction == "up":
+        def get_tile(r, c): return grid[r][c]
+        for c in range(COLS):
+            def getter(i, col=c): return get_tile(i, col)
+            def setter(tile, dest_r, is_merged, merged_with, col=c):
+                start = (tile.x, tile.y)
+                end = (col * RECT_WIDTH, dest_r * RECT_HEIGHT)
+                animations.append({"tile": tile, "start": start, "end": end, "is_merged": is_merged, "merged_with": merged_with, "dest_key": f"{dest_r}{col}"})
+            handle_line(getter, setter)
+    elif direction == "down":
+        def get_tile(r, c): return grid[r][c]
+        for c in range(COLS):
+            def getter(i, col=c): return get_tile(ROWS - 1 - i, col)
+            def setter(tile, dest_i, is_merged, merged_with, col=c):
+                dest_r = ROWS - 1 - dest_i
+                start = (tile.x, tile.y)
+                end = (col * RECT_WIDTH, dest_r * RECT_HEIGHT)
+                animations.append({"tile": tile, "start": start, "end": end, "is_merged": is_merged, "merged_with": merged_with, "dest_key": f"{dest_r}{col}"})
+            handle_line(getter, setter)
 
-        update_tiles(window, tiles, sorted_tiles)
+    # If no animations (no tiles moved), return without adding a new tile
+    if not animations:
+        return None
+
+    # Run animation frames
+    frames = ANIM_FRAMES
+    for f in range(frames):
+        clock.tick(FPS)
+        t = (f + 1) / frames
+        eased = 1 - pow(1 - t, 3)  # ease-out-cubic
+
+        # update tile positions according to eased progress
+        for anim in animations:
+            sx, sy = anim["start"]
+            ex, ey = anim["end"]
+            anim["tile"].x = sx + (ex - sx) * eased
+            anim["tile"].y = sy + (ey - sy) * eased
+
+        draw(window, tiles)
+
+    # Finalize positions and construct new tile map, handling merges
+    result_tiles = {}
+    handled_merge_targets = set()
+    for anim in animations:
+        tile = anim["tile"]
+        dest_key = anim["dest_key"]
+        # Snap to exact grid position
+        dest_row = int(dest_key[0])
+        dest_col = int(dest_key[1])
+        tile.row = dest_row
+        tile.col = dest_col
+        tile.set_xy_from_grid()
+
+    # Build mapping of destination keys to lists of tiles that landed there (to resolve merges)
+    landing = {}
+    for anim in animations:
+        k = anim["dest_key"]
+        landing.setdefault(k, []).append(anim)
+
+    for k, items in landing.items():
+        if len(items) == 1 and not items[0]["is_merged"]:
+            t = items[0]["tile"]
+            result_tiles[k] = t
+        else:
+            # merged cell: compute new value and keep one tile object
+            # pick the first tile object as the survivor
+            survivor = items[0]["tile"]
+            total = 0
+            for it in items:
+                total += it["tile"].value
+            # In 2048, merging two equal tiles yields double a single value
+            # so total should be 2 * single value; but computing as sum is safe
+            survivor.value = total
+            result_tiles[k] = survivor
+
+    # Replace tiles dict contents
+    tiles.clear()
+    for k, t in result_tiles.items():
+        tiles[k] = t
 
     return end_move(tiles)
 
