@@ -13,7 +13,7 @@ class Animation:
     tile: Tile
     start: Tuple[float, float]
     end: Tuple[float, float]
-    merge_target: Optional[Tile] = None
+    is_merging: bool = False
 
 
 class Board:
@@ -44,140 +44,252 @@ class Board:
 
     def move(self, direction: str) -> Optional[List[Animation]]:
         """Return list of animations if move changed board, else None."""
-        animations = []
-
-        if direction == "left":
-            for r in range(ROWS):
-                line = [self.tiles.get(self._key(r, c)) for c in range(COLS)]
-                new_line, anims = self._slide_line(line, direction)
-                animations.extend(anims)
-                self._apply_line(r, 0, new_line, direction)
-        elif direction == "right":
-            for r in range(ROWS):
-                line = [
-                    self.tiles.get(self._key(r, c)) for c in range(COLS - 1, -1, -1)
-                ]
-                new_line, anims = self._slide_line(line, direction)
-                animations.extend(anims)
-                self._apply_line(r, COLS - 1, new_line, direction, reverse=True)
-        elif direction == "up":
+        # Convert current board to 2D array of values
+        old_grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+        for r in range(ROWS):
             for c in range(COLS):
-                line = [self.tiles.get(self._key(r, c)) for r in range(ROWS)]
-                new_line, anims = self._slide_line(line, direction)
-                animations.extend(anims)
-                self._apply_line(0, c, new_line, direction, vertical=True)
-        elif direction == "down":
-            for c in range(COLS):
-                line = [
-                    self.tiles.get(self._key(r, c)) for r in range(ROWS - 1, -1, -1)
-                ]
-                new_line, anims = self._slide_line(line, direction)
-                animations.extend(anims)
-                self._apply_line(
-                    ROWS - 1, c, new_line, direction, vertical=True, reverse=True
-                )
+                key = self._key(r, c)
+                if key in self.tiles:
+                    old_grid[r][c] = self.tiles[key].value
 
-        if not animations:
+        # Apply move logic to get new grid
+        new_grid, animations = self._apply_move(old_grid, direction)
+
+        # Check if board actually changed
+        if old_grid == new_grid:
             return None
 
-        # Finalize merge values
-        merge_map: Dict[int, Tile] = {}
-        for anim in animations:
-            if anim.merge_target:
-                merge_map[id(anim.merge_target)] = anim.merge_target
+        # Rebuild tiles dictionary from new grid
+        new_tiles: Dict[Key, Tile] = {}
+        for r in range(ROWS):
+            for c in range(COLS):
+                if new_grid[r][c] != 0:
+                    tile = Tile(new_grid[r][c], r, c)
+                    new_tiles[self._key(r, c)] = tile
 
-        for target in merge_map.values():
-            target.value *= 2
-            if target.merge_partner:
-                key = self._key(target.merge_partner.row, target.merge_partner.col)
-                self.tiles.pop(key, None)
+        self.tiles = new_tiles
 
         # Snap all tiles to grid
         for tile in self.tiles.values():
             tile.update_pos()
+
         return animations
 
-    def _slide_line(
-        self, line: List[Optional[Tile]], direction: str
-    ) -> Tuple[List[Tile], List[Animation]]:
+    def _apply_move(
+        self, grid: List[List[int]], direction: str
+    ) -> Tuple[List[List[int]], List[Animation]]:
+        """Apply move to grid and generate animations."""
         from .constants import RECT_WIDTH, RECT_HEIGHT
 
-        filtered = [t for t in line if t is not None]
-        new_line: List[Tile] = []
-        animations: List[Animation] = []
+        animations = []
+        new_grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+
+        if direction == "left":
+            for r in range(ROWS):
+                line = [grid[r][c] for c in range(COLS)]
+                new_line = self._collapse_line(line)
+                for c, val in enumerate(new_line):
+                    new_grid[r][c] = val
+
+                # Generate animations for this row
+                self._generate_row_animations(grid, new_grid, r, direction, animations)
+
+        elif direction == "right":
+            for r in range(ROWS):
+                line = [grid[r][c] for c in range(COLS - 1, -1, -1)]
+                new_line = self._collapse_line(line)
+                for i, val in enumerate(new_line):
+                    c = COLS - 1 - i
+                    new_grid[r][c] = val
+
+                self._generate_row_animations(grid, new_grid, r, direction, animations)
+
+        elif direction == "up":
+            for c in range(COLS):
+                line = [grid[r][c] for r in range(ROWS)]
+                new_line = self._collapse_line(line)
+                for r, val in enumerate(new_line):
+                    new_grid[r][c] = val
+
+                self._generate_col_animations(grid, new_grid, c, direction, animations)
+
+        elif direction == "down":
+            for c in range(COLS):
+                line = [grid[r][c] for r in range(ROWS - 1, -1, -1)]
+                new_line = self._collapse_line(line)
+                for i, val in enumerate(new_line):
+                    r = ROWS - 1 - i
+                    new_grid[r][c] = val
+
+                self._generate_col_animations(grid, new_grid, c, direction, animations)
+
+        return new_grid, animations
+
+    def _collapse_line(self, line: List[int]) -> List[int]:
+        """Collapse a line (merge and slide), returns new line with same length."""
+        # Filter out zeros
+        filtered = [x for x in line if x != 0]
+
+        # Merge adjacent equal values
+        merged = []
         i = 0
-
         while i < len(filtered):
-            current = filtered[i]
-            if i + 1 < len(filtered) and filtered[i + 1].value == current.value:
-
-                merged = Tile(current.value, current.row, current.col)
-                merged.merge_partner = filtered[i + 1]
-                new_line.append(merged)
-
-                # Both tiles animate to same spot
-                dest_idx = len(new_line) - 1
-                dest_pos = self._dest_pos(dest_idx, direction, current.row, current.col)
-
-                animations.append(
-                    Animation(
-                        tile=current,
-                        start=(current.x, current.y),
-                        end=dest_pos,
-                        merge_target=merged,
-                    )
-                )
-                animations.append(
-                    Animation(
-                        tile=filtered[i + 1],
-                        start=(filtered[i + 1].x, filtered[i + 1].y),
-                        end=dest_pos,
-                        merge_target=merged,
-                    )
-                )
+            if i + 1 < len(filtered) and filtered[i] == filtered[i + 1]:
+                merged.append(filtered[i] * 2)
                 i += 2
             else:
-                new_line.append(current)
-                dest_idx = len(new_line) - 1
-                dest_pos = self._dest_pos(dest_idx, direction, current.row, current.col)
-                animations.append(
-                    Animation(tile=current, start=(current.x, current.y), end=dest_pos)
-                )
+                merged.append(filtered[i])
                 i += 1
 
-        return new_line, animations
+        # Pad with zeros to original length
+        return merged + [0] * (len(line) - len(merged))
 
-    def _dest_pos(
-        self, idx: int, direction: str, row: int, col: int
-    ) -> Tuple[float, float]:
+    def _generate_row_animations(
+        self,
+        old_grid: List[List[int]],
+        new_grid: List[List[int]],
+        row: int,
+        direction: str,
+        animations: List[Animation],
+    ):
+        """Generate animations for a row move."""
         from .constants import RECT_WIDTH, RECT_HEIGHT
 
-        if direction in ("left", "right"):
-            c = idx if direction == "left" else COLS - 1 - idx
-            return (c * RECT_WIDTH, row * RECT_HEIGHT)
-        else:  # up/down
-            r = idx if direction == "up" else ROWS - 1 - idx
-            return (col * RECT_WIDTH, r * RECT_HEIGHT)
+        old_tiles = {}
+        for c in range(COLS):
+            if old_grid[row][c] != 0:
+                key = self._key(row, c)
+                if key in self.tiles:
+                    old_tiles[c] = self.tiles[key]
 
-    def _apply_line(
+        # Track which old positions contributed to each new position
+        old_positions = [c for c in range(COLS) if old_grid[row][c] != 0]
+        new_positions = [c for c in range(COLS) if new_grid[row][c] != 0]
+
+        if direction == "left":
+            old_positions.sort()
+        else:  # right
+            old_positions.sort(reverse=True)
+
+        # Map old tiles to new positions
+        old_idx = 0
+        for new_c in new_positions:
+            new_val = new_grid[row][new_c]
+            dest_pos = (new_c * RECT_WIDTH, row * RECT_HEIGHT)
+
+            # Check if this is a merge (two tiles with half the value)
+            if old_idx + 1 < len(old_positions):
+                c1, c2 = old_positions[old_idx], old_positions[old_idx + 1]
+                if c1 in old_tiles and c2 in old_tiles:
+                    if (
+                        old_tiles[c1].value == old_tiles[c2].value
+                        and old_tiles[c1].value * 2 == new_val
+                    ):
+                        # Merge: both tiles animate to same spot
+                        animations.append(
+                            Animation(
+                                tile=old_tiles[c1],
+                                start=(old_tiles[c1].x, old_tiles[c1].y),
+                                end=dest_pos,
+                                is_merging=True,
+                            )
+                        )
+                        animations.append(
+                            Animation(
+                                tile=old_tiles[c2],
+                                start=(old_tiles[c2].x, old_tiles[c2].y),
+                                end=dest_pos,
+                                is_merging=True,
+                            )
+                        )
+                        old_idx += 2
+                        continue
+
+            # No merge: single tile moves
+            if old_idx < len(old_positions):
+                old_c = old_positions[old_idx]
+                if old_c in old_tiles:
+                    animations.append(
+                        Animation(
+                            tile=old_tiles[old_c],
+                            start=(old_tiles[old_c].x, old_tiles[old_c].y),
+                            end=dest_pos,
+                            is_merging=False,
+                        )
+                    )
+                old_idx += 1
+
+    def _generate_col_animations(
         self,
-        start_r: int,
-        start_c: int,
-        line: List[Tile],
+        old_grid: List[List[int]],
+        new_grid: List[List[int]],
+        col: int,
         direction: str,
-        vertical: bool = False,
-        reverse: bool = False,
+        animations: List[Animation],
     ):
-        self.tiles = {k: t for k, t in self.tiles.items() if t not in line}
-        for i, tile in enumerate(line):
-            if vertical:
-                r = i if not reverse else ROWS - 1 - i
-                c = start_c
-            else:
-                r = start_r
-                c = i if not reverse else COLS - 1 - i
-            tile.row, tile.col = r, c
-            self.tiles[self._key(r, c)] = tile
+        """Generate animations for a column move."""
+        from .constants import RECT_WIDTH, RECT_HEIGHT
+
+        old_tiles = {}
+        for r in range(ROWS):
+            if old_grid[r][col] != 0:
+                key = self._key(r, col)
+                if key in self.tiles:
+                    old_tiles[r] = self.tiles[key]
+
+        old_positions = [r for r in range(ROWS) if old_grid[r][col] != 0]
+        new_positions = [r for r in range(ROWS) if new_grid[r][col] != 0]
+
+        if direction == "up":
+            old_positions.sort()
+        else:  # down
+            old_positions.sort(reverse=True)
+
+        old_idx = 0
+        for new_r in new_positions:
+            new_val = new_grid[new_r][col]
+            dest_pos = (col * RECT_WIDTH, new_r * RECT_HEIGHT)
+
+            # Check if this is a merge
+            if old_idx + 1 < len(old_positions):
+                r1, r2 = old_positions[old_idx], old_positions[old_idx + 1]
+                if r1 in old_tiles and r2 in old_tiles:
+                    if (
+                        old_tiles[r1].value == old_tiles[r2].value
+                        and old_tiles[r1].value * 2 == new_val
+                    ):
+                        animations.append(
+                            Animation(
+                                tile=old_tiles[r1],
+                                start=(old_tiles[r1].x, old_tiles[r1].y),
+                                end=dest_pos,
+                                is_merging=True,
+                            )
+                        )
+                        animations.append(
+                            Animation(
+                                tile=old_tiles[r2],
+                                start=(old_tiles[r2].x, old_tiles[r2].y),
+                                end=dest_pos,
+                                is_merging=True,
+                            )
+                        )
+                        old_idx += 2
+                        continue
+
+            # No merge: single tile moves
+            if old_idx < len(old_positions):
+                old_r = old_positions[old_idx]
+                if old_r in old_tiles:
+                    animations.append(
+                        Animation(
+                            tile=old_tiles[old_r],
+                            start=(old_tiles[old_r].x, old_tiles[old_r].y),
+                            end=dest_pos,
+                            is_merging=False,
+                        )
+                    )
+                old_idx += 1
 
     def is_game_over(self) -> bool:
         if len(self.tiles) < ROWS * COLS:
