@@ -16,7 +16,10 @@ def main():
 
     board = Board()
     renderer = Renderer(window)
-    renderer.draw(board)
+    score = 0
+    best_score = 5036  # Placeholder
+
+    renderer.draw(board, score, best_score)
 
     run = True
     while run:
@@ -41,17 +44,18 @@ def main():
                 if direction:
                     ANIMATING = True
 
-                    animations = board.move(direction)
-                    if animations:
-                        renderer.animate(animations, board, clock)
+                    moved = board.move(direction)
+                    if moved:
+                        renderer.animate(board, clock, score, best_score)
+                        board.finalize_move()
                         board.spawn_random()
                     ANIMATING = False
-                    renderer.draw(board)
+                    renderer.draw(board, score, best_score)
 
                     if board.is_game_over():
                         print("GAME OVER")
 
-        renderer.draw(board)
+        renderer.draw(board, score, best_score)
 
     pygame.quit()
 

@@ -19,6 +19,8 @@ class Animation:
 class Board:
     def __init__(self):
         self.tiles: Dict[Key, Tile] = {}
+        self._pending_new_grid: Optional[List[List[int]]] = None
+        self._pending_map: Optional[Dict[Key, Tile]] = None
         self._spawn_initial()
 
     def _key(self, r: int, c: int) -> Key:
@@ -42,9 +44,10 @@ class Board:
         tile = Tile(val, r, c)
         self.tiles[self._key(r, c)] = tile
 
-    def move(self, direction: str) -> Optional[List[Animation]]:
-        """Return list of animations if move changed board, else None."""
-        # Convert current board to 2D array of values
+    def move(self, direction: str) -> bool:
+        """Apply move, set per-tile animations, and defer grid update until finalize_move.
+        Returns True if the board changed."""
+        # Build old grid
         old_grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
         for r in range(ROWS):
             for c in range(COLS):
@@ -52,29 +55,184 @@ class Board:
                 if key in self.tiles:
                     old_grid[r][c] = self.tiles[key].value
 
-        # Apply move logic to get new grid
-        new_grid, animations = self._apply_move(old_grid, direction)
+        # Helper to process a line of indices in traversal order
+        def process_line(indices: List[Tuple[int, int]]):
+            # Collect existing tiles in order
+            line_tiles: List[Tile] = []
+            for (r, c) in indices:
+                t = self.tiles.get(self._key(r, c))
+                if t and t.value != 0:
+                    line_tiles.append(t)
 
-        # Check if board actually changed
-        if old_grid == new_grid:
-            return None
+            result_values: List[int] = []
+            result_tiles: List[Tile] = []
+            i = 0
+            target_idx = 0
+            while i < len(line_tiles):
+                cur = line_tiles[i]
+                if i + 1 < len(line_tiles) and line_tiles[i + 1].value == cur.value:
+                    # Merge cur and next
+                    nxt = line_tiles[i + 1]
+                    dest_r, dest_c = indices[target_idx]
+                    # Animate both to the same destination
+                    cur.set_animation(cur.row, cur.col, dest_r, dest_c)
+                    nxt.set_animation(nxt.row, nxt.col, dest_r, dest_c)
+                    # Survivor is cur, doubled value
+                    result_values.append(cur.value * 2)
+                    result_tiles.append(cur)
+                    i += 2
+                    target_idx += 1
+                else:
+                    # Move single tile
+                    dest_r, dest_c = indices[target_idx]
+                    cur.set_animation(cur.row, cur.col, dest_r, dest_c)
+                    result_values.append(cur.value)
+                    result_tiles.append(cur)
+                    i += 1
+                    target_idx += 1
 
-        # Rebuild tiles dictionary from new grid
+            # Pad with zeros to full length
+            while len(result_values) < len(indices):
+                result_values.append(0)
+
+            return result_values, result_tiles
+
+        new_grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
+        dest_map: Dict[Key, Tile] = {}
+
+        changed = False
+        if direction == "left":
+            for r in range(ROWS):
+                indices = [(r, c) for c in range(COLS)]
+                values, tiles_seq = process_line(indices)
+                for c, val in enumerate(values):
+                    new_grid[r][c] = val
+                # Record survivors and their destination mapping
+                write_idx = 0
+                for t in tiles_seq:
+                    dr, dc = indices[write_idx]
+                    dest_map[self._key(dr, dc)] = t
+                    write_idx += 1
+                if [old_grid[r][c] for c in range(COLS)] != values:
+                    changed = True
+
+        elif direction == "right":
+            for r in range(ROWS):
+                indices = [(r, c) for c in range(COLS - 1, -1, -1)]
+                values, tiles_seq = process_line(indices)
+                # Place values back in right-justified positions
+                for i, val in enumerate(values):
+                    c = COLS - 1 - i
+                    new_grid[r][c] = val
+                # Map survivors to their destination in right order
+                write_idx = 0
+                for t in tiles_seq:
+                    dr, dc = indices[write_idx]
+                    dest_map[self._key(dr, dc)] = t
+                    write_idx += 1
+                if [old_grid[r][c] for c in range(COLS)] != [new_grid[r][c] for c in range(COLS)]:
+                    changed = True
+
+        elif direction == "up":
+            for c in range(COLS):
+                indices = [(r, c) for r in range(ROWS)]
+                values, tiles_seq = process_line(indices)
+                for r, val in enumerate(values):
+                    new_grid[r][c] = val
+                write_idx = 0
+                for t in tiles_seq:
+                    dr, dc = indices[write_idx]
+                    dest_map[self._key(dr, dc)] = t
+                    write_idx += 1
+                if [old_grid[r][c] for r in range(ROWS)] != [new_grid[r][c] for r in range(ROWS)]:
+                    changed = True
+
+        elif direction == "down":
+            for c in range(COLS):
+                indices = [(r, c) for r in range(ROWS - 1, -1, -1)]
+                values, tiles_seq = process_line(indices)
+                for i, val in enumerate(values):
+                    r = ROWS - 1 - i
+                    new_grid[r][c] = val
+                write_idx = 0
+                for t in tiles_seq:
+                    dr, dc = indices[write_idx]
+                    dest_map[self._key(dr, dc)] = t
+                    write_idx += 1
+                if [old_grid[r][c] for r in range(ROWS)] != [new_grid[r][c] for r in range(ROWS)]:
+                    changed = True
+
+        if not changed:
+            return False
+
+        # Defer applying new grid until after animation
+        self._pending_new_grid = new_grid
+        self._pending_map = dest_map
+        return True
+
+    def finalize_move(self):
+        """Apply the pending grid after animations complete: update tile values and positions."""
+        if self._pending_new_grid is None or self._pending_map is None:
+            return
+        new_grid = self._pending_new_grid
+        dest_map = self._pending_map
         new_tiles: Dict[Key, Tile] = {}
         for r in range(ROWS):
             for c in range(COLS):
-                if new_grid[r][c] != 0:
-                    tile = Tile(new_grid[r][c], r, c)
-                    new_tiles[self._key(r, c)] = tile
-
+                val = new_grid[r][c]
+                if val == 0:
+                    continue
+                key = self._key(r, c)
+                t = dest_map.get(key)
+                if t is None:
+                    # Fallback create if missing (shouldn't happen)
+                    t = Tile(val, r, c)
+                else:
+                    t.value = val
+                    t.row = r
+                    t.col = c
+                    t.update_pos()
+                new_tiles[key] = t
         self.tiles = new_tiles
+        self._pending_new_grid = None
+        self._pending_map = None
 
-        # Snap all tiles to grid
-        for tile in self.tiles.values():
-            tile.update_pos()
+    def _apply_move_simple(self, grid: List[List[int]], direction: str) -> List[List[int]]:
+        """Apply move to grid and return new grid."""
+        new_grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
 
-        return animations
-
+        if direction == "left":
+            for r in range(ROWS):
+                line = [grid[r][c] for c in range(COLS)]
+                new_line = self._collapse_line(line)
+                for c, val in enumerate(new_line):
+                    new_grid[r][c] = val
+        
+        elif direction == "right":
+            for r in range(ROWS):
+                line = [grid[r][c] for c in range(COLS - 1, -1, -1)]
+                new_line = self._collapse_line(line)
+                for i, val in enumerate(new_line):
+                    c = COLS - 1 - i
+                    new_grid[r][c] = val
+        
+        elif direction == "up":
+            for c in range(COLS):
+                line = [grid[r][c] for r in range(ROWS)]
+                new_line = self._collapse_line(line)
+                for r, val in enumerate(new_line):
+                    new_grid[r][c] = val
+        
+        elif direction == "down":
+            for c in range(COLS):
+                line = [grid[r][c] for r in range(ROWS - 1, -1, -1)]
+                new_line = self._collapse_line(line)
+                for i, val in enumerate(new_line):
+                    r = ROWS - 1 - i
+                    new_grid[r][c] = val
+        
+        return new_grid
+    
     def _apply_move(
         self, grid: List[List[int]], direction: str
     ) -> Tuple[List[List[int]], List[Animation]]:
