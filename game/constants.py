@@ -1,5 +1,7 @@
+import pygame
+
 WIDTH, HEIGHT = 800, 900  # Increased height for header
-FPS = 60
+FPS = 120
 
 HEADER_HEIGHT = 100
 GRID_TOP = HEADER_HEIGHT
@@ -17,6 +19,25 @@ BACKGROUND_COLOR = (205, 192, 180)
 OUTLINE_COLOR = (187, 173, 160)
 FONT_COLOR = (119, 110, 101)
 
+# Score box colors
+SCORE_BOX_BG = (187, 173, 160)
+SCORE_LABEL_COLOR = (238, 228, 218)
+SCORE_TEXT_COLOR = (255, 255, 255)
+
+# Button colors
+BUTTON_BG = (143, 122, 102)
+BUTTON_TEXT_COLOR = (255, 255, 255)
+BUTTON_DISABLED_BG = (170, 160, 150)
+BUTTON_DISABLED_TEXT = (200, 190, 180)
+
+# Game over overlay styling
+GAME_OVER_OVERLAY_COLOR = (0, 0, 0)  # base color, alpha applied dynamically
+GAME_OVER_OVERLAY_ALPHA = 200  # final overlay alpha
+GAME_OVER_PANEL_BG = (238, 228, 218)  # light tile-like panel
+GAME_OVER_TITLE_COLOR = (119, 110, 101)
+GAME_OVER_TEXT_COLOR = (119, 110, 101)
+
+# Tile colors
 TILE_COLORS = {
     2: (237, 225, 218),
     4: (238, 225, 201),
@@ -32,15 +53,41 @@ TILE_COLORS = {
 }
 
 # Font settings
-FONT_NAME = "couriernew"
+
+if pygame.font.match_font("Clear Sans"):
+    FONT_NAME = "Clear Sans"
+elif pygame.font.match_font("Clear Sans Medium"):
+    FONT_NAME = "Clear Sans Medium"
+else:
+    FONT_NAME = "couriernew"
+
+MONO_FONT_NAME = "couriernew"
+
 TILE_FONT_SIZE = 100
 SCORE_FONT_SIZE = 32
 LABEL_FONT_SIZE = 18
+BUTTON_FONT_SIZE = 20
+GAME_OVER_TITLE_FONT_SIZE = 60
+GAME_OVER_MSG_FONT_SIZE = 22
 
-ANIM_FRAMES = 5
-TILE_PADDING = (
-    0  # Increase this value to shrink tiles (creates more space between them)
-)
+# Start screen specific font sizes and dimensions
+START_SCREEN_TITLE_FONT_SIZE = 100
+START_SCREEN_BEST_LABEL_FONT_SIZE = 25
+START_SCREEN_BEST_VALUE_FONT_SIZE = 80
+START_SCREEN_INSTRUCTION_FONT_SIZE = 28
+START_SCREEN_PANEL_WIDTH = 480
+START_SCREEN_PANEL_HEIGHT = 370
+START_SCREEN_CREDIT_FONT_SIZE = 18
+
+# Game over screen dimensions
+GAME_OVER_PANEL_WIDTH = 420
+GAME_OVER_PANEL_HEIGHT = 260
+
+# Transition and animation settings
+GAME_OVER_DELAY_SECONDS = 1.5  # Delay before showing game over screen
+START_FADE_PANEL_STEPS = 10  # Number of steps for panel content fade out
+START_FADE_OVERLAY_STEPS = 10  # Number of steps for dark overlay fade out
+START_FADE_DURATION_MS = 400  # Total duration of start fade in milliseconds
 
 # Precomputed grid coordinates for each position (offset by GRID_TOP)
 GRID_X = [OUTLINE_THICKNESS + c * (RECT_WIDTH + OUTLINE_THICKNESS) for c in range(COLS)]
@@ -48,3 +95,10 @@ GRID_Y = [
     GRID_TOP + OUTLINE_THICKNESS + r * (RECT_HEIGHT + OUTLINE_THICKNESS)
     for r in range(ROWS)
 ]
+
+ANIM_FRAMES = 10
+TILE_PADDING = 0
+
+# Optional: Enable tile spawn animation (currently not implemented)
+SPAWN_ANIMATION_ENABLED = False
+SPAWN_ANIMATION_FRAMES = 8

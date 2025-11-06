@@ -1,0 +1,2 @@
+pygame==2.6.1
+pytweening==1.2.0

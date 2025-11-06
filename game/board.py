@@ -16,11 +16,23 @@ class Animation:
     is_merging: bool = False
 
 
+@dataclass
+class BoardState:
+    """Represents a complete board state for undo functionality."""
+
+    tiles: Dict[Key, Tile]
+    score: int
+
+
 class Board:
     def __init__(self):
         self.tiles: Dict[Key, Tile] = {}
         self._pending_new_grid: Optional[List[List[int]]] = None
         self._pending_map: Optional[Dict[Key, Tile]] = None
+        self._pending_score_gain: int = 0
+        self.score: int = 0
+        self.history: List[BoardState] = []
+        self.undo_available: bool = False
         self._spawn_initial()
 
     def _key(self, r: int, c: int) -> Key:
@@ -44,9 +56,55 @@ class Board:
         tile = Tile(val, r, c)
         self.tiles[self._key(r, c)] = tile
 
+    def save_state(self):
+        """Save current board state to history for undo."""
+        # Deep copy tiles dictionary
+        tiles_copy = {}
+        for key, tile in self.tiles.items():
+            tiles_copy[key] = Tile(tile.value, tile.row, tile.col)
+
+        state = BoardState(tiles=tiles_copy, score=self.score)
+        self.history.append(state)
+
+        # Keep only last state for one-time undo
+        if len(self.history) > 1:
+            self.history.pop(0)
+
+    def undo(self) -> bool:
+        """Restore previous board state. Returns True if undo was successful."""
+        if not self.history or not self.undo_available:
+            return False
+
+        state = self.history.pop()
+        self.tiles = state.tiles
+        self.score = state.score
+
+        # Update positions for all tiles
+        for tile in self.tiles.values():
+            tile.update_pos()
+
+        # Disable undo after use
+        self.undo_available = False
+
+        return True
+
+    def reset(self):
+        """Reset the board to initial state."""
+        self.tiles = {}
+        self.score = 0
+        self.history = []
+        self.undo_available = False
+        self._pending_new_grid = None
+        self._pending_map = None
+        self._pending_score_gain = 0
+        self._spawn_initial()
+
     def move(self, direction: str) -> bool:
         """Apply move, set per-tile animations, and defer grid update until finalize_move.
         Returns True if the board changed."""
+        # Save state before move
+        self.save_state()
+
         # Build old grid
         old_grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
         for r in range(ROWS):
@@ -59,13 +117,14 @@ class Board:
         def process_line(indices: List[Tuple[int, int]]):
             # Collect existing tiles in order
             line_tiles: List[Tile] = []
-            for (r, c) in indices:
+            for r, c in indices:
                 t = self.tiles.get(self._key(r, c))
                 if t and t.value != 0:
                     line_tiles.append(t)
 
             result_values: List[int] = []
             result_tiles: List[Tile] = []
+            score_gain = 0
             i = 0
             target_idx = 0
             while i < len(line_tiles):
@@ -78,8 +137,10 @@ class Board:
                     cur.set_animation(cur.row, cur.col, dest_r, dest_c)
                     nxt.set_animation(nxt.row, nxt.col, dest_r, dest_c)
                     # Survivor is cur, doubled value
-                    result_values.append(cur.value * 2)
+                    merged_value = cur.value * 2
+                    result_values.append(merged_value)
                     result_tiles.append(cur)
+                    score_gain += merged_value
                     i += 2
                     target_idx += 1
                 else:
@@ -95,79 +156,91 @@ class Board:
             while len(result_values) < len(indices):
                 result_values.append(0)
 
-            return result_values, result_tiles
+            return result_values, result_tiles, score_gain
 
+        # Direction-specific traversal configurations
+        direction_configs = {
+            "left": {
+                "iter_range": range(ROWS),
+                "get_indices": lambda i: [(i, c) for c in range(COLS)],
+                "set_grid": lambda new_grid, i, values: [
+                    new_grid[i].__setitem__(c, values[c]) for c in range(COLS)
+                ],
+                "get_old": lambda i: [old_grid[i][c] for c in range(COLS)],
+                "get_new": lambda new_grid, i: [new_grid[i][c] for c in range(COLS)],
+            },
+            "right": {
+                "iter_range": range(ROWS),
+                "get_indices": lambda i: [(i, c) for c in range(COLS - 1, -1, -1)],
+                "set_grid": lambda new_grid, i, values: [
+                    new_grid[i].__setitem__(COLS - 1 - idx, values[idx])
+                    for idx in range(len(values))
+                ],
+                "get_old": lambda i: [old_grid[i][c] for c in range(COLS)],
+                "get_new": lambda new_grid, i: [new_grid[i][c] for c in range(COLS)],
+            },
+            "up": {
+                "iter_range": range(COLS),
+                "get_indices": lambda i: [(r, i) for r in range(ROWS)],
+                "set_grid": lambda new_grid, i, values: [
+                    new_grid[r].__setitem__(i, values[r]) for r in range(ROWS)
+                ],
+                "get_old": lambda i: [old_grid[r][i] for r in range(ROWS)],
+                "get_new": lambda new_grid, i: [new_grid[r][i] for r in range(ROWS)],
+            },
+            "down": {
+                "iter_range": range(COLS),
+                "get_indices": lambda i: [(r, i) for r in range(ROWS - 1, -1, -1)],
+                "set_grid": lambda new_grid, i, values: [
+                    new_grid[ROWS - 1 - idx].__setitem__(i, values[idx])
+                    for idx in range(len(values))
+                ],
+                "get_old": lambda i: [old_grid[r][i] for r in range(ROWS)],
+                "get_new": lambda new_grid, i: [new_grid[r][i] for r in range(ROWS)],
+            },
+        }
+
+        if direction not in direction_configs:
+            if self.history:
+                self.history.pop()
+            return False
+
+        config = direction_configs[direction]
         new_grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
         dest_map: Dict[Key, Tile] = {}
-
+        total_score_gain = 0
         changed = False
-        if direction == "left":
-            for r in range(ROWS):
-                indices = [(r, c) for c in range(COLS)]
-                values, tiles_seq = process_line(indices)
-                for c, val in enumerate(values):
-                    new_grid[r][c] = val
-                # Record survivors and their destination mapping
-                write_idx = 0
-                for t in tiles_seq:
-                    dr, dc = indices[write_idx]
-                    dest_map[self._key(dr, dc)] = t
-                    write_idx += 1
-                if [old_grid[r][c] for c in range(COLS)] != values:
-                    changed = True
 
-        elif direction == "right":
-            for r in range(ROWS):
-                indices = [(r, c) for c in range(COLS - 1, -1, -1)]
-                values, tiles_seq = process_line(indices)
-                # Place values back in right-justified positions
-                for i, val in enumerate(values):
-                    c = COLS - 1 - i
-                    new_grid[r][c] = val
-                # Map survivors to their destination in right order
-                write_idx = 0
-                for t in tiles_seq:
-                    dr, dc = indices[write_idx]
-                    dest_map[self._key(dr, dc)] = t
-                    write_idx += 1
-                if [old_grid[r][c] for c in range(COLS)] != [new_grid[r][c] for c in range(COLS)]:
-                    changed = True
+        # Process each line (row or column) according to direction
+        for i in config["iter_range"]:
+            indices = config["get_indices"](i)
+            values, tiles_seq, score_gain = process_line(indices)
+            total_score_gain += score_gain
 
-        elif direction == "up":
-            for c in range(COLS):
-                indices = [(r, c) for r in range(ROWS)]
-                values, tiles_seq = process_line(indices)
-                for r, val in enumerate(values):
-                    new_grid[r][c] = val
-                write_idx = 0
-                for t in tiles_seq:
-                    dr, dc = indices[write_idx]
-                    dest_map[self._key(dr, dc)] = t
-                    write_idx += 1
-                if [old_grid[r][c] for r in range(ROWS)] != [new_grid[r][c] for r in range(ROWS)]:
-                    changed = True
+            # Set values in new grid
+            config["set_grid"](new_grid, i, values)
 
-        elif direction == "down":
-            for c in range(COLS):
-                indices = [(r, c) for r in range(ROWS - 1, -1, -1)]
-                values, tiles_seq = process_line(indices)
-                for i, val in enumerate(values):
-                    r = ROWS - 1 - i
-                    new_grid[r][c] = val
-                write_idx = 0
-                for t in tiles_seq:
-                    dr, dc = indices[write_idx]
-                    dest_map[self._key(dr, dc)] = t
-                    write_idx += 1
-                if [old_grid[r][c] for r in range(ROWS)] != [new_grid[r][c] for r in range(ROWS)]:
-                    changed = True
+            # Record survivors and their destination mapping
+            write_idx = 0
+            for t in tiles_seq:
+                dr, dc = indices[write_idx]
+                dest_map[self._key(dr, dc)] = t
+                write_idx += 1
+
+            # Check if this line changed
+            if config["get_old"](i) != config["get_new"](new_grid, i):
+                changed = True
 
         if not changed:
+            # Move didn't change anything, remove the state we saved
+            if self.history:
+                self.history.pop()
             return False
 
         # Defer applying new grid until after animation
         self._pending_new_grid = new_grid
         self._pending_map = dest_map
+        self._pending_score_gain = total_score_gain
         return True
 
     def finalize_move(self):
@@ -177,6 +250,8 @@ class Board:
         new_grid = self._pending_new_grid
         dest_map = self._pending_map
         new_tiles: Dict[Key, Tile] = {}
+        created_128 = False
+
         for r in range(ROWS):
             for c in range(COLS):
                 val = new_grid[r][c]
@@ -188,16 +263,30 @@ class Board:
                     # Fallback create if missing (shouldn't happen)
                     t = Tile(val, r, c)
                 else:
+                    # Check if we just created a 128 tile
+                    if t.value != val and val == 128:
+                        created_128 = True
                     t.value = val
                     t.row = r
                     t.col = c
                     t.update_pos()
                 new_tiles[key] = t
         self.tiles = new_tiles
+
+        # Apply score gain
+        self.score += self._pending_score_gain
+
+        # Enable undo if 128 tile was created
+        if created_128:
+            self.undo_available = True
+
         self._pending_new_grid = None
         self._pending_map = None
+        self._pending_score_gain = 0
 
-    def _apply_move_simple(self, grid: List[List[int]], direction: str) -> List[List[int]]:
+    def _apply_move_simple(
+        self, grid: List[List[int]], direction: str
+    ) -> List[List[int]]:
         """Apply move to grid and return new grid."""
         new_grid = [[0 for _ in range(COLS)] for _ in range(ROWS)]
 
@@ -207,7 +296,7 @@ class Board:
                 new_line = self._collapse_line(line)
                 for c, val in enumerate(new_line):
                     new_grid[r][c] = val
-        
+
         elif direction == "right":
             for r in range(ROWS):
                 line = [grid[r][c] for c in range(COLS - 1, -1, -1)]
@@ -215,14 +304,14 @@ class Board:
                 for i, val in enumerate(new_line):
                     c = COLS - 1 - i
                     new_grid[r][c] = val
-        
+
         elif direction == "up":
             for c in range(COLS):
                 line = [grid[r][c] for r in range(ROWS)]
                 new_line = self._collapse_line(line)
                 for r, val in enumerate(new_line):
                     new_grid[r][c] = val
-        
+
         elif direction == "down":
             for c in range(COLS):
                 line = [grid[r][c] for r in range(ROWS - 1, -1, -1)]
@@ -230,9 +319,9 @@ class Board:
                 for i, val in enumerate(new_line):
                     r = ROWS - 1 - i
                     new_grid[r][c] = val
-        
+
         return new_grid
-    
+
     def _apply_move(
         self, grid: List[List[int]], direction: str
     ) -> Tuple[List[List[int]], List[Animation]]:
