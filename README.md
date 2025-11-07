@@ -21,7 +21,7 @@ A Python implementation of the popular 2048 puzzle game using Pygame.
 
 ## Credits
 
-- **Developer:** Arwa Hammad...
+- **Developers:** Arwa Hammad, Sara Abdel-jawad, Olivia Lee, Yashitha Tippanur Venkata
 - **Original 2048:** Gabriele Cirulli
 - **Font:** Clear Sans (with Courier New)
 

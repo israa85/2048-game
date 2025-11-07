@@ -12,6 +12,9 @@ from game.constants import (
     START_FADE_PANEL_STEPS,
     START_FADE_OVERLAY_STEPS,
     START_FADE_DURATION_MS,
+    YOU_WIN_KEY,
+    YOU_WIN_FADE_STEPS,
+    YOU_WIN_OVERLAY_ALPHA,
 )
 from typing import Tuple, Optional
 import time
@@ -81,6 +84,34 @@ def fade_out_start_screen(
         pygame.time.wait(overlay_fade_delay)
 
 
+def fade_in_you_win(
+    renderer: Renderer,
+    board: Board,
+    score_manager: ScoreManager,
+    window: pygame.Surface,
+    clock: pygame.time.Clock,
+) -> None:
+    """Fade the YOU WIN overlay in over multiple steps."""
+    # Stage 1: fade overlay in (text hidden)
+    for i in range(YOU_WIN_FADE_STEPS):
+        overlay_alpha: int = int(YOU_WIN_OVERLAY_ALPHA * (i + 1) / YOU_WIN_FADE_STEPS)
+        renderer.draw(board, board.score, score_manager.get_best_score(), update=False)
+        renderer.draw_you_win_overlay(overlay_alpha=overlay_alpha, text_alpha=0)
+        pygame.display.update()
+        clock.tick(max(1, FPS // 6))
+
+    # Stage 2: fade text in on top of final overlay
+    for i in range(YOU_WIN_FADE_STEPS):
+        text_alpha: int = int(255 * (i + 1) / YOU_WIN_FADE_STEPS)
+        renderer.draw(board, board.score, score_manager.get_best_score(), update=False)
+        # overlay at full alpha, text with increasing alpha
+        renderer.draw_you_win_overlay(
+            overlay_alpha=YOU_WIN_OVERLAY_ALPHA, text_alpha=text_alpha
+        )
+        pygame.display.update()
+        clock.tick(max(1, FPS // 6))
+
+
 def main() -> None:
     """Main game loop handling events, updates, and rendering."""
     global ANIMATING
@@ -104,6 +135,7 @@ def main() -> None:
     # Game state flags
     start_screen: bool = True  # Show start screen initially
     game_over: bool = False  # Track if game has ended
+    show_you_win: bool = False  # Toggle to display YOU WIN overlay
 
     # Initial render: show start screen
     renderer.draw(board, board.score, score_manager.get_best_score(), update=False)
@@ -121,9 +153,29 @@ def main() -> None:
                 run = False
                 break
 
+            # Toggle/show YOU WIN overlay with assigned key (fade in when showing)
+            if event.type == pygame.KEYDOWN and event.key == YOU_WIN_KEY:
+                if not show_you_win:
+                    fade_in_you_win(renderer, board, score_manager, window, clock)
+                    show_you_win = True
+                else:
+                    # hide immediately
+                    show_you_win = False
+                continue
+
             # Handle mouse clicks
             if event.type == pygame.MOUSEBUTTONDOWN and not ANIMATING:
                 mouse_pos: Tuple[int, int] = event.pos
+
+                # If YOU WIN overlay visible, clicking anywhere keeps playing (dismiss overlay)
+                if show_you_win:
+                    show_you_win = False
+                    # immediate redraw for responsiveness
+                    renderer.draw(
+                        board, board.score, score_manager.get_best_score(), update=False
+                    )
+                    pygame.display.update()
+                    continue
 
                 # Game over screen: click anywhere to reset (but not on reset button)
                 if game_over:
@@ -251,17 +303,24 @@ def main() -> None:
                 board, board.score, score_manager.get_best_score(), update=False
             )
             renderer.draw_start_screen(score_manager.get_best_score())
-            pygame.display.update()
         elif game_over:
             # Show game over overlay with final scores
             renderer.draw(
                 board, board.score, score_manager.get_best_score(), update=False
             )
             renderer.draw_game_over_overlay(board.score, score_manager.get_best_score())
-            pygame.display.update()
         else:
             # Normal gameplay rendering
-            renderer.draw(board, board.score, score_manager.get_best_score())
+            renderer.draw(
+                board, board.score, score_manager.get_best_score(), update=False
+            )
+
+        # If YOU WIN overlay is toggled on, draw it on top of whatever is shown
+        if show_you_win:
+            renderer.draw_you_win_overlay()
+
+        # Single present call per frame
+        pygame.display.update()
 
     pygame.quit()
 

@@ -18,6 +18,10 @@ class Renderer:
         self.window: pygame.Surface = window
         # Font for tile numbers
         self.font: pygame.font.Font = pygame.font.SysFont(FONT_NAME, TILE_FONT_SIZE)
+        # Font for 4-digit tile numbers (smaller)
+        self.font_4digit: pygame.font.Font = pygame.font.SysFont(
+            FONT_NAME, TILE_FONT_SIZE_FOUR_DIGIT
+        )
         # Font for score values in header
         self.score_font: pygame.font.Font = pygame.font.SysFont(
             FONT_NAME, SCORE_FONT_SIZE
@@ -43,6 +47,14 @@ class Renderer:
             FONT_NAME, START_SCREEN_TITLE_FONT_SIZE
         )
 
+        # YOU WIN fonts (new)
+        self.you_win_title_font: pygame.font.Font = pygame.font.SysFont(
+            FONT_NAME, YOU_WIN_TITLE_FONT_SIZE
+        )
+        self.you_win_msg_font: pygame.font.Font = pygame.font.SysFont(
+            FONT_NAME, YOU_WIN_MSG_FONT_SIZE
+        )
+
     def draw(
         self, board: Board, score: int = 0, best_score: int = 0, update: bool = True
     ) -> None:
@@ -64,10 +76,9 @@ class Renderer:
 
         # Draw all active tiles on top of grid
         for tile in board.get_tiles():
-            tile.draw(self.window, self.font)
+            tile.draw(self.window, self.font, self.font_4digit)
 
-        if update:
-            pygame.display.update()
+        # NOTE: do not call pygame.display.update() here — present/update should be controlled by the main loop
 
     def animate(
         self,
@@ -109,7 +120,8 @@ class Renderer:
                 )
 
             # Redraw scene with updated tile positions
-            self.draw(board, score, best_score, update=True)
+            self.draw(board, score, best_score, update=False)
+            pygame.display.update()  # explicit single update per animation frame
             clock.tick(FPS)
 
         # Animation complete - clear animation state from all tiles
@@ -385,10 +397,14 @@ class Renderer:
 
             # Draw authors names and credits to original creators
             credit_text_line1: pygame.Surface = credit_font.render(
-                "ARWA HAMMAD", True, text_color_alt
+                "ARWA HAMMAD, SARA ABDEL-JAWAD", True, text_color_alt
             )
 
             credit_text_line2: pygame.Surface = credit_font.render(
+                "OLIVIA LEE, YASHITHA TIPPANUR VENKATA", True, text_color_alt
+            )
+
+            credit_text_line3: pygame.Surface = credit_font.render(
                 "ORIGINAL 2048 BY GABRIELE CIRULLI", True, text_color_alt
             )
 
@@ -405,6 +421,14 @@ class Renderer:
                 (
                     panel_x + (panel_width - credit_text_line2.get_width()) // 2,
                     panel_y + 320,
+                ),
+            )
+
+            self.window.blit(
+                credit_text_line3,
+                (
+                    panel_x + (panel_width - credit_text_line3.get_width()) // 2,
+                    panel_y + 355,
                 ),
             )
 
@@ -494,3 +518,58 @@ class Renderer:
                 panel_y + 205,
             ),
         )
+
+    def draw_you_win_overlay(
+        self,
+        title: str = "YOU WIN",
+        subtitle: str = "YOU MADE 2048!",
+        overlay_alpha: int = YOU_WIN_OVERLAY_ALPHA,
+        text_alpha: int = 255,
+    ) -> None:
+        """Draw a yellow YOU WIN overlay with white text.
+
+        Args:
+            title: Main title text
+            subtitle: Secondary instruction text
+            overlay_alpha: Overlay alpha (0-255)
+            text_alpha: Text alpha (0-255)
+        """
+        # Full-screen translucent yellow overlay
+        overlay: pygame.Surface = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        clr: tuple = (*YOU_WIN_OVERLAY_COLOR, max(0, min(255, overlay_alpha)))
+        overlay.fill(clr)
+        self.window.blit(overlay, (0, 0))
+
+        # Title text (large)
+        title_surface: pygame.Surface = self.you_win_title_font.render(
+            title, True, YOU_WIN_TEXT_COLOR
+        )
+        title_x = (WIDTH - title_surface.get_width()) // 2
+        title_y = (HEIGHT // 2) - title_surface.get_height() - 10
+        # apply text alpha if provided
+        if 0 <= text_alpha < 255:
+            title_surface = title_surface.convert_alpha()
+            title_surface.set_alpha(text_alpha)
+        self.window.blit(title_surface, (title_x, title_y))
+
+        # Subtitle / instruction (smaller)
+        subtitle_surface: pygame.Surface = self.you_win_msg_font.render(
+            subtitle, True, YOU_WIN_TEXT_COLOR
+        )
+        subtitle_x = (WIDTH - subtitle_surface.get_width()) // 2
+        subtitle_y = title_y + title_surface.get_height() + 12
+        if 0 <= text_alpha < 255:
+            subtitle_surface = subtitle_surface.convert_alpha()
+            subtitle_surface.set_alpha(text_alpha)
+        self.window.blit(subtitle_surface, (subtitle_x, subtitle_y))
+
+        # Click-to-keep-playing prompt (new)
+        keep_playing_surface: pygame.Surface = self.you_win_msg_font.render(
+            "CLICK TO KEEP PLAYING", True, YOU_WIN_TEXT_COLOR
+        )
+        kp_x = (WIDTH - keep_playing_surface.get_width()) // 2
+        kp_y = subtitle_y + subtitle_surface.get_height() + 10
+        if 0 <= text_alpha < 255:
+            keep_playing_surface = keep_playing_surface.convert_alpha()
+            keep_playing_surface.set_alpha(text_alpha)
+        self.window.blit(keep_playing_surface, (kp_x, kp_y))
